@@ -3,7 +3,7 @@ module FlootyPermissions
 export validate_no_traversal, validate_safe_extension, is_within_workspace
 export DANGEROUS_EXTENSIONS, is_dangerous_extension
 export validate_new_file, validate_directory
-export normalize_path, is_safe_filename, splitext
+export normalize_path, is_safe_filename, splitext, tempdir
 
 # ============================================================================
 # Configuration
@@ -274,6 +274,22 @@ function splitext(filename::String)::Tuple{String,String}
         return (filename, "")
     end
     return (filename[1:dot_pos-1], filename[dot_pos:end])
+end
+
+"""
+    tempdir() -> String
+
+Get the system's temporary directory path.
+
+Returns the path with trailing separator removed for consistency.
+"""
+function tempdir()::String
+    td = Base.tempdir()
+    # Remove trailing separator if present
+    if endswith(td, Base.Filesystem.path_separator)
+        return td[1:end-1]
+    end
+    return td
 end
 
 end # module FlootyPermissions
