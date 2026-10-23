@@ -1,5 +1,9 @@
 module FlootyPermissions
 
+using FlootyAbstract
+using Dates
+using UUIDs
+
 export validate_no_traversal, validate_safe_extension, is_within_workspace
 export DANGEROUS_EXTENSIONS, is_dangerous_extension
 export validate_new_file, validate_directory
@@ -291,5 +295,121 @@ function tempdir()::String
     end
     return td
 end
+
+struct FileResource <: FlootyAbstract.AbstractResource
+    path::String
+    absolute::Bool
+
+    function FileResource(path::String; absolute::Bool=false)
+        new(path, absolute)
+    end
+end
+
+FlootyAbstract.resource_type(::FileResource) = :file
+
+struct ToolResource <: FlootyAbstract.AbstractResource
+    name::String
+    category::Symbol
+
+    function ToolResource(name::String, category::Symbol=:custom)
+        new(name, category)
+    end
+end
+
+FlootyAbstract.resource_type(::ToolResource) = :tool
+
+struct SessionResource <: FlootyAbstract.AbstractResource
+    session_id::UUID
+    aspect::Symbol
+
+    function SessionResource(session_id::UUID, aspect::Symbol=:read)
+        aspect in (:read, :write, :admin, :delete) || error("Invalid session aspect: $aspect")
+        new(session_id, aspect)
+    end
+end
+
+FlootyAbstract.resource_type(::SessionResource) = :session
+
+struct PermissionGrant
+    id::UUID
+    resource::AbstractResource
+    actions::Set{Symbol}
+    granted_by::UUID
+    granted_at::DateTime
+    expires_at::Union{DateTime,Nothing}
+
+    function PermissionGrant(resource::AbstractResource, actions::Vector{Symbol};
+                             granted_by::UUID,
+                             expires_at::Union{DateTime,Nothing}=nothing)
+        new(uuid4(), resource, Set(actions), granted_by, now(), expires_at)
+    end
+end
+
+mutable struct PermissionSet <: FlootyAbstract.AbstractPermission
+    id::UUID
+    owner_id::UUID
+    owner_type::Symbol
+    grants::Vector{PermissionGrant}
+    default_deny::Bool
+    created_at::DateTime
+    updated_at::DateTime
+
+    function PermissionSet(owner_id::UUID, owner_type::Symbol=:guest; default_deny::Bool=true)
+        now_time = now()
+        new(uuid4(), owner_id, owner_type, PermissionGrant[], default_deny, now_time, now_time)
+    end
+end
+
+FlootyAbstract.permission_resource(perm::PermissionSet) = perm
+
+function FlootyAbstract.permission_actions(perm::PermissionSet, resource::AbstractResource)
+    actions = Set{Symbol}()
+    for grant in perm.grants
+        if grant.resource == resource
+            union!(actions, grant.actions)
+        end
+    end
+    collect(actions)
+end
+
+struct PermissionCheckResult
+    allowed::Bool
+    reason::String
+end
+
+function FlootyAbstract.check_permission(perm::PermissionSet, resource::AbstractResource, action::Symbol)
+    for grant in perm.grants
+        if grant.resource == resource && action in grant.actions
+            if grant.expires_at === nothing || now() < grant.expires_at
+                return PermissionCheckResult(true, "Granted")
+            end
+        end
+    end
+    PermissionCheckResult(!perm.default_deny, perm.default_deny ? "No matching permission" : "Default allow")
+end
+
+function grant_permission!(perm::PermissionSet, resource::AbstractResource, actions::Vector{Symbol};
+                           granted_by::UUID,
+                           expires_at::Union{DateTime,Nothing}=nothing)
+    grant = PermissionGrant(resource, actions; granted_by=granted_by, expires_at=expires_at)
+    push!(perm.grants, grant)
+    perm.updated_at = now()
+    perm
+end
+
+function revoke_permission!(perm::PermissionSet, resource::AbstractResource, action::Symbol)
+    for grant in perm.grants
+        if grant.resource == resource
+            delete!(grant.actions, action)
+        end
+    end
+    filter!(g -> !isempty(g.actions), perm.grants)
+    perm.updated_at = now()
+    perm
+end
+
+export FileResource, ToolResource, SessionResource
+export PermissionGrant, PermissionSet, PermissionCheckResult
+export grant_permission!, revoke_permission!
 
 end # module FlootyPermissions
